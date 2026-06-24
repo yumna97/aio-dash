@@ -461,7 +461,7 @@ export default function Home() {
                     ))}
                     {behavior.rageClicks > 20 && (
                       <div style={{ background: '#FEF2F2', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', display: 'flex', gap: '10px' }}>
-                        <span style={{ color: '#DC2626', fontWeight: '700', flexShrink: 0' }}>{(opportunities.slice(0, 3).length + 1)}.</span>
+                        <span style={{ color: '#DC2626', fontWeight: '700', flexShrink: 0 }}>{(opportunities.slice(0, 3).length + 1)}.</span>
                         <span style={{ color: '#374151' }}>Review <strong>{behavior.rageClicks} rage clicks</strong> in Microsoft Clarity — watch session recordings on the pricing and product pages to identify broken interactions.</span>
                       </div>
                     )}
