@@ -318,10 +318,18 @@ export default function Home() {
 
             {/* ── BEHAVIOR ─────────────────────────────────────────────────── */}
             {tab==='behavior' && <>
-              <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'8px',padding:'12px 14px',marginBottom:'1rem',fontSize:'12px',color:'#92400E',display:'flex',gap:'8px',alignItems:'flex-start'}}>
-                <span style={{flexShrink:0}}>ℹ️</span>
-                <span><strong>Clarity API note:</strong> Real-time Clarity data requires a valid API token in Vercel environment variables. Until then, this section shows GA4-derived behavior signals below, which are equally useful. View session recordings at <strong>clarity.microsoft.com</strong>.</span>
-              </div>
+{behavior && (
+                <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'8px',padding:'12px 14px',marginBottom:'1rem',fontSize:'12px',color:'#1E40AF',display:'flex',gap:'8px',alignItems:'flex-start'}}>
+                  <span style={{flexShrink:0}}>✅</span>
+                  <span><strong>Clarity connected</strong> — showing live session data from Microsoft Clarity.</span>
+                </div>
+              )}
+              {!behavior && (
+                <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'8px',padding:'12px 14px',marginBottom:'1rem',fontSize:'12px',color:'#92400E',display:'flex',gap:'8px',alignItems:'flex-start'}}>
+                  <span style={{flexShrink:0}}>ℹ️</span>
+                  <span>Clarity API not connected. Showing GA4 behavior signals instead. View recordings at <a href="https://clarity.microsoft.com" target="_blank" style={{color:'#D97706',fontWeight:'600'}}>clarity.microsoft.com</a></span>
+                </div>
+              )}
 
               <div style={{...card(),marginBottom:'1rem'}}>
                 <div style={sectionTitle}>GA4 behavior signals</div>
