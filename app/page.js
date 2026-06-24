@@ -35,6 +35,7 @@ export default function Home() {
   const keywords = data?.keywords || [];
   const opps = data?.opportunities || [];
   const gscSum = data?.gscSummary;
+  const behavior = data?.clarity || null;
 
   // ── Styles ──────────────────────────────────────────────────────────────────
   const pill = a => ({ padding:'5px 14px', border:'1px solid', borderRadius:'20px', fontSize:'12px', cursor:'pointer', fontWeight: a?'600':'400', borderColor: a?'#2563EB':'#D1D5DB', background: a?'#EFF6FF':'#fff', color: a?'#2563EB':'#374151' });
@@ -318,7 +319,7 @@ export default function Home() {
 
             {/* ── BEHAVIOR ─────────────────────────────────────────────────── */}
             {tab==='behavior' && <>
-{behavior && (
+              {behavior && (
                 <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'8px',padding:'12px 14px',marginBottom:'1rem',fontSize:'12px',color:'#1E40AF',display:'flex',gap:'8px',alignItems:'flex-start'}}>
                   <span style={{flexShrink:0}}>✅</span>
                   <span><strong>Clarity connected</strong> — showing live session data from Microsoft Clarity.</span>
