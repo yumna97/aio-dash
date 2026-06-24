@@ -1,5 +1,4 @@
-// app/api/dashboard-data/route.js — v8
-// Fixed: GSC API enable reminder, Clarity correct header, cleaner fallbacks
+// app/api/dashboard-data/route.js — v9 final
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
@@ -11,15 +10,16 @@ export async function GET(req) {
 
   try {
     const token = await getGoogleToken();
-    const [curr, prev, pages, sources, newRet, exits, gsc, clarity] = await Promise.allSettled([
+    const [curr, prev, pages, sources, newRet, exits, dailyTrend, gsc, clarity] = await Promise.allSettled([
       fetchSummary(token, startDate, 'today', region),
       fetchSummary(token, prevStart, prevEnd, region),
       fetchPages(token, startDate, 'today', region),
       fetchSources(token, startDate, 'today', region),
       fetchNewReturn(token, startDate, 'today', region),
       fetchExitPages(token, startDate, 'today', region),
+      fetchDailyTrend(token, startDate, 'today', region),
       fetchGSC(token, days),
-      fetchClarity(),
+      fetchClarity(days),
     ]);
 
     const c = curr.status === 'fulfilled' ? curr.value : null;
@@ -35,21 +35,22 @@ export async function GET(req) {
         bounceRate:    { current: c.bounceRate,  previous: p?.bounceRate||0, change: pct(c.bounceRate, p?.bounceRate) },
         newUsers:      { current: c.newUsers,    previous: p?.newUsers||0,   change: pct(c.newUsers,   p?.newUsers) },
       } : nullKPIs(),
-      topPages:    pages.status   === 'fulfilled' ? pages.value   : [],
-      sources:     sources.status === 'fulfilled' ? sources.value : [],
-      newReturn:   newRet.status  === 'fulfilled' ? newRet.value  : { new:0, returning:0, other:0, newPct:0, returningPct:0, otherPct:0 },
-      exitPages:   exits.status   === 'fulfilled' ? exits.value   : [],
-      keywords:    gsc.status === 'fulfilled' ? gsc.value.keywords     : [],
+      topPages:      pages.status      === 'fulfilled' ? pages.value      : [],
+      sources:       sources.status    === 'fulfilled' ? sources.value    : [],
+      newReturn:     newRet.status     === 'fulfilled' ? newRet.value     : { new:0, returning:0, other:0, newPct:0, returningPct:0, otherPct:0 },
+      exitPages:     exits.status      === 'fulfilled' ? exits.value      : [],
+      dailyTrend:    dailyTrend.status === 'fulfilled' ? dailyTrend.value : [],
+      keywords:      gsc.status === 'fulfilled' ? gsc.value.keywords      : [],
       opportunities: gsc.status === 'fulfilled' ? gsc.value.opportunities : [],
-      gscSummary:  gsc.status === 'fulfilled' ? gsc.value.summary      : null,
-      gscError:    gsc.status === 'rejected'  ? gsc.reason?.message    : null,
-      clarity:     clarity.status === 'fulfilled' ? clarity.value : null,
-      clarityError: clarity.status === 'rejected' ? clarity.reason?.message : null,
+      gscSummary:    gsc.status === 'fulfilled' ? gsc.value.summary       : null,
+      gscError:      gsc.status === 'rejected'  ? gsc.reason?.message     : null,
+      clarity:       clarity.status === 'fulfilled' ? clarity.value       : null,
+      clarityError:  clarity.status === 'rejected'  ? clarity.reason?.message : null,
       meta: { days, region, refreshed: new Date().toISOString() },
     });
   } catch (err) {
     console.error('Fatal:', err.message);
-    return Response.json({ error: err.message, kpis: nullKPIs(), topPages:[], sources:[], newReturn:{new:0,returning:0,other:0,newPct:0,returningPct:0,otherPct:0}, exitPages:[], keywords:[], opportunities:[], gscSummary:null, clarity:null, meta:{ days, region, refreshed: new Date().toISOString() } });
+    return Response.json({ error: err.message, kpis: nullKPIs(), topPages:[], sources:[], newReturn:{new:0,returning:0,other:0,newPct:0,returningPct:0,otherPct:0}, exitPages:[], dailyTrend:[], keywords:[], opportunities:[], gscSummary:null, clarity:null, meta:{ days, region, refreshed: new Date().toISOString() } });
   }
 }
 
@@ -91,6 +92,28 @@ async function fetchSummary(token, startDate, endDate, region) {
   return { sessions:parseInt(r[0]?.value||0), users:parseInt(r[1]?.value||0), pageViews:parseInt(r[2]?.value||0), engagement:parseFloat((parseFloat(r[3]?.value||0)/60).toFixed(1)), bounceRate:parseFloat((parseFloat(r[4]?.value||0)*100).toFixed(1)), newUsers:parseInt(r[5]?.value||0) };
 }
 
+async function fetchDailyTrend(token, startDate, endDate, region) {
+  const expr = countryExpr(region);
+  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'date'}], metrics:[{name:'sessions'},{name:'totalUsers'},{name:'screenPageViews'}], orderBys:[{dimension:{dimensionName:'date'}}] };
+  if (expr) body.dimensionFilter = { andGroup:{ expressions:[{filter:expr.filter}] } };
+  const d = await ga4post(token, body);
+  if (!d.rows) return [];
+  return d.rows.map(r => ({
+    date: r.dimensionValues[0]?.value,
+    label: formatDate(r.dimensionValues[0]?.value),
+    sessions: parseInt(r.metricValues[0]?.value||0),
+    users: parseInt(r.metricValues[1]?.value||0),
+    pageViews: parseInt(r.metricValues[2]?.value||0),
+  }));
+}
+
+function formatDate(d) {
+  if (!d) return '';
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const date = new Date(d.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'));
+  return days[date.getDay()];
+}
+
 async function fetchPages(token, startDate, endDate, region) {
   const expr = countryExpr(region);
   const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'pagePath'},{name:'pageTitle'}], metrics:[{name:'screenPageViews'},{name:'averageSessionDuration'},{name:'bounceRate'},{name:'sessions'},{name:'engagementRate'}], orderBys:[{metric:{metricName:'screenPageViews'},desc:true}], limit:10 };
@@ -103,18 +126,17 @@ async function fetchPages(token, startDate, endDate, region) {
     const engRate = parseFloat((parseFloat(row.metricValues[4]?.value||0)*100).toFixed(1));
     const title = row.dimensionValues[1]?.value;
     const health = engRate>70&&eng>2?'excellent':engRate>50?'good':engRate>30?'warning':'critical';
-    const rec = health==='warning'||health==='critical' ? getRecommendation(row.dimensionValues[0]?.value||'/', engRate, bounce, eng) : null;
+    const rec = (health==='warning'||health==='critical') ? getRecommendation(row.dimensionValues[0]?.value||'/', engRate, bounce, eng) : null;
     return { page:row.dimensionValues[0]?.value||'/', title:(!title||title==='(not set)'||title==='Untitled')?null:title, views:parseInt(row.metricValues[0]?.value||0), engagement:eng, bounceRate:bounce, engagementRate:engRate, sessions:parseInt(row.metricValues[3]?.value||0), health, recommendation:rec };
   });
 }
 
 function getRecommendation(page, engRate, bounce, eng) {
-  if (page === '/') return 'Homepage has the highest US traffic but 65%+ bounce. Test a more direct hero headline — US restaurant operators respond to ROI-focused messaging, not general AI claims.';
-  if (page.includes('product') && bounce > 50) return 'Product page bounce is high. Add 2–3 customer testimonials, a clear pricing anchor, and a demo CTA visible without scrolling.';
-  if (page.includes('careers') && engRate < 30) return 'Careers page has very low engagement. Check if the page loads correctly in the US — could be a geo-specific rendering issue.';
-  if (bounce > 60) return 'High bounce rate — review the page hero/intro. Users are leaving without scrolling. Consider a clearer value proposition above the fold.';
-  if (engRate < 40) return 'Low engagement rate — content may not match search intent. Review what keywords are bringing users to this page.';
-  if (eng < 0.5) return 'Very low time on page — content may be too sparse or the layout is causing quick exits. Add more visual content or structured sections.';
+  if (page === '/') return 'Homepage has the highest US traffic but 65%+ bounce. Test a more direct hero headline — US restaurant operators respond to ROI-focused messaging.';
+  if (page.includes('product') && bounce > 50) return 'Product page bounce is high. Add customer testimonials, a clear pricing anchor, and a demo CTA visible without scrolling.';
+  if (page.includes('careers') && engRate < 30) return 'Careers page has very low engagement from US visitors. Check if the page loads correctly — could be a geo-specific rendering issue.';
+  if (bounce > 60) return 'High bounce rate — review the page hero. Users are leaving without scrolling. Consider a clearer value proposition above the fold.';
+  if (engRate < 40) return 'Low engagement — content may not match user intent. Review what keywords bring users here.';
   return 'Review content structure and ensure primary CTA is visible without scrolling.';
 }
 
@@ -155,70 +177,85 @@ async function fetchGSC(token, days) {
   if (!siteUrl) throw new Error('Missing GSC_SITE_URL');
   const end = new Date().toISOString().split('T')[0];
   const start = new Date(Date.now()-days*86400000).toISOString().split('T')[0];
-  const tryFetch = async (withFilter) => {
+  // Try multiple URL formats
+  const urlsToTry = [siteUrl, siteUrl.replace('https://','sc-domain:').replace('/',''), 'sc-domain:aioapp.com', 'https://aioapp.com/'];
+  const tryFetch = async (url, withFilter) => {
     const body = { startDate:start, endDate:end, dimensions:['query'], rowLimit:25 };
     if (withFilter) body.dimensionFilterGroups = [{ filters:[{dimension:'country',operator:'equals',expression:'usa'}] }];
-    const r = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`, { method:'POST', headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const r = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(url)}/searchAnalytics/query`, { method:'POST', headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
     return r.json();
   };
-  let d = await tryFetch(true);
-  if (d.error || !d.rows || d.rows.length===0) d = await tryFetch(false);
-  if (d.error) throw new Error(d.error.message);
+  let d = null;
+  for (const url of urlsToTry) {
+    const res = await tryFetch(url, true);
+    if (!res.error && res.rows?.length > 0) { d = res; break; }
+    const res2 = await tryFetch(url, false);
+    if (!res2.error && res2.rows?.length > 0) { d = res2; break; }
+  }
+  if (!d || d.error) throw new Error(d?.error?.message || 'No GSC data found');
   const rows = d.rows||[];
-  const keywords = rows.slice(0,8).map(r=>({ keyword:r.keys[0], impressions:r.impressions||0, clicks:r.clicks||0, ctr:parseFloat(((r.ctr||0)*100).toFixed(1)), position:parseFloat((r.position||0).toFixed(1)), trend:r.position<10?'up':'neutral' }));
+  const keywords = rows.slice(0,8).map(r=>({ keyword:r.keys[0], impressions:r.impressions||0, clicks:r.clicks||0, ctr:parseFloat(((r.ctr||0)*100).toFixed(1)), position:parseFloat((r.position||0).toFixed(1)) }));
   const opportunities = rows.filter(r=>r.position>8&&r.position<35&&r.impressions>20).slice(0,5).map(r=>({ keyword:r.keys[0], impressions:r.impressions||0, clicks:r.clicks||0, ctr:parseFloat(((r.ctr||0)*100).toFixed(1)), position:parseFloat((r.position||0).toFixed(1)), potential:r.impressions>300?'high':'medium', gap:Math.max(1,Math.round(r.position-3)) }));
   const ti=rows.reduce((s,r)=>s+(r.impressions||0),0), tc=rows.reduce((s,r)=>s+(r.clicks||0),0);
   return { keywords, opportunities, summary:{ totalImpressions:ti, totalClicks:tc, avgCTR:ti>0?parseFloat((tc/ti*100).toFixed(1)):0, avgPosition:rows.length>0?parseFloat((rows.reduce((s,r)=>s+(r.position||0),0)/rows.length).toFixed(1)):0 } };
 }
 
-async function fetchClarity() {
+async function fetchClarity(days) {
   const projectId = process.env.CLARITY_PROJECT_ID;
   const apiToken = process.env.CLARITY_API_TOKEN;
   if (!projectId || !apiToken || apiToken==='none') return null;
 
   const end = new Date().toISOString().split('T')[0];
-  const start = new Date(Date.now()-7*86400000).toISOString().split('T')[0];
+  const start = new Date(Date.now()-days*86400000).toISOString().split('T')[0];
 
-  // Clarity Data Export API — correct endpoint from clarity.ms/export-data
-  const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${projectId}&startDate=${start}&endDate=${end}&granularity=daily&dimension=All&metric=All`;
+  // Clarity Data Export API — fetches per metric
+  const metrics = ['RageClickCount','DeadClickCount','ErrorClickCount','FrustratedSessionCount','TotalSessionCount'];
+  const results = {};
 
-  const res = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${apiToken}`,
-      'Ocp-Apim-Subscription-Key': apiToken,
+  await Promise.all(metrics.map(async metric => {
+    try {
+      const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${projectId}&startDate=${start}&endDate=${end}&granularity=daily&dimension=All&metric=${metric}`;
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${apiToken}`, 'Ocp-Apim-Subscription-Key': apiToken } });
+      if (!res.ok) return;
+      const data = await res.json();
+      // Each metric returns array, aggregate subTotal across all days
+      const rows = Array.isArray(data) ? data : [];
+      let total = 0;
+      rows.forEach(row => {
+        if (row.information) {
+          row.information.forEach(info => { total += parseInt(info.subTotal || 0); });
+        }
+      });
+      results[metric] = total;
+    } catch(e) { results[metric] = 0; }
+  }));
+
+  // Also get session count
+  try {
+    const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${projectId}&startDate=${start}&endDate=${end}&granularity=daily&dimension=All&metric=TotalSessionCount`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${apiToken}`, 'Ocp-Apim-Subscription-Key': apiToken } });
+    if (res.ok) {
+      const data = await res.json();
+      const rows = Array.isArray(data) ? data : [];
+      let total = 0;
+      rows.forEach(row => { if (row.information) row.information.forEach(info => { total += parseInt(info.sessionsCount || 0); }); });
+      results['TotalSessionCount'] = total;
     }
-  });
+  } catch(e) {}
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Clarity ${res.status}: ${txt.slice(0,300)}`);
-  }
-
-  const json = await res.json();
-  // Clarity export API returns array of daily metrics
-  const rows = Array.isArray(json) ? json : (json.data || json.metrics || [json]);
-  
-  // Aggregate across all days
-  let rageClicks=0, deadClicks=0, errorClicks=0, sessions=0, frustrated=0;
-  rows.forEach(row => {
-    rageClicks += row.rageClickCount || row.rageClicks || 0;
-    deadClicks += row.deadClickCount || row.deadClicks || 0;
-    errorClicks += row.errorClickCount || row.errorClicks || 0;
-    sessions += row.sessionCount || row.sessions || row.totalSessions || 0;
-    frustrated += row.frustratedSessionCount || row.frustratedSessions || 0;
-  });
+  const sessions = results['TotalSessionCount'] || 0;
+  const frustrated = results['FrustratedSessionCount'] || 0;
 
   return {
-    rageClicks,
-    deadClicks,
-    errorClicks,
+    rageClicks: results['RageClickCount'] || 0,
+    deadClicks: results['DeadClickCount'] || 0,
+    errorClicks: results['ErrorClickCount'] || 0,
     recordedSessions: sessions,
     frustratedSessions: frustrated,
-    frustrationRate: sessions>0 ? parseFloat((frustrated/sessions*100).toFixed(1)) : 0,
-    avgSessionDuration: rows[0]?.avgSessionDuration || '0m',
-    feedbackSubmitted: rows.reduce((s,r)=>s+(r.feedbackCount||0),0),
+    frustrationRate: sessions > 0 ? parseFloat((frustrated/sessions*100).toFixed(1)) : 0,
+    avgSessionDuration: '—',
+    feedbackSubmitted: 0,
     topFrustrationPages: [],
-    rawSample: rows[0] || null, // for debugging
   };
 }
 
