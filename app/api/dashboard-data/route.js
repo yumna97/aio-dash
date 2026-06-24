@@ -175,28 +175,50 @@ async function fetchClarity() {
   const projectId = process.env.CLARITY_PROJECT_ID;
   const apiToken = process.env.CLARITY_API_TOKEN;
   if (!projectId || !apiToken || apiToken==='none') return null;
+
   const end = new Date().toISOString().split('T')[0];
   const start = new Date(Date.now()-7*86400000).toISOString().split('T')[0];
-  // Try subscription key header (Microsoft API Management style)
-  const res = await fetch(
-    `https://api.clarity.microsoft.com/v1/projects/${projectId}/metrics?startDate=${start}&endDate=${end}`,
-    { headers: { 'Ocp-Apim-Subscription-Key': apiToken, 'Content-Type':'application/json' } }
-  );
+
+  // Clarity Data Export API — correct endpoint from clarity.ms/export-data
+  const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${projectId}&startDate=${start}&endDate=${end}&granularity=daily&dimension=All&metric=All`;
+
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${apiToken}`,
+      'Ocp-Apim-Subscription-Key': apiToken,
+    }
+  });
+
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error(`Clarity ${res.status}: ${txt.slice(0,200)}`);
+    throw new Error(`Clarity ${res.status}: ${txt.slice(0,300)}`);
   }
-  const data = await res.json();
+
+  const json = await res.json();
+  // Clarity export API returns array of daily metrics
+  const rows = Array.isArray(json) ? json : (json.data || json.metrics || [json]);
+  
+  // Aggregate across all days
+  let rageClicks=0, deadClicks=0, errorClicks=0, sessions=0, frustrated=0;
+  rows.forEach(row => {
+    rageClicks += row.rageClickCount || row.rageClicks || 0;
+    deadClicks += row.deadClickCount || row.deadClicks || 0;
+    errorClicks += row.errorClickCount || row.errorClicks || 0;
+    sessions += row.sessionCount || row.sessions || row.totalSessions || 0;
+    frustrated += row.frustratedSessionCount || row.frustratedSessions || 0;
+  });
+
   return {
-    rageClicks: data.rageClickCount||data.rageClicks||0,
-    deadClicks: data.deadClickCount||data.deadClicks||0,
-    errorClicks: data.errorClickCount||data.errorClicks||0,
-    recordedSessions: data.recordedSessionCount||data.totalSessions||0,
-    frustratedSessions: data.frustratedSessionCount||0,
-    frustrationRate: data.recordedSessionCount>0 ? parseFloat((data.frustratedSessionCount/data.recordedSessionCount*100).toFixed(1)) : 0,
-    avgSessionDuration: data.avgSessionDuration||'0m',
-    feedbackSubmitted: data.feedbackCount||0,
-    topFrustrationPages: (data.topFrustratedPages||[]).slice(0,3).map(p=>({ page:p.url||p.page||'/', frustrated:p.frustratedSessionCount||0, errorRate:`${parseFloat((p.errorRate||0).toFixed(0))}%`, severity:(p.frustratedSessionCount||0)>30?'high':'medium' })),
+    rageClicks,
+    deadClicks,
+    errorClicks,
+    recordedSessions: sessions,
+    frustratedSessions: frustrated,
+    frustrationRate: sessions>0 ? parseFloat((frustrated/sessions*100).toFixed(1)) : 0,
+    avgSessionDuration: rows[0]?.avgSessionDuration || '0m',
+    feedbackSubmitted: rows.reduce((s,r)=>s+(r.feedbackCount||0),0),
+    topFrustrationPages: [],
+    rawSample: rows[0] || null, // for debugging
   };
 }
 
