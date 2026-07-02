@@ -1,4 +1,5 @@
-// app/api/dashboard-data/route.js — v9 final
+// app/api/dashboard-data/route.js — v10 FIXED
+// Fixes: Clarity metrics parsing + branded keyword filtering + Postgres foundation
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
@@ -98,150 +99,198 @@ async function fetchDailyTrend(token, startDate, endDate, region) {
   if (expr) body.dimensionFilter = { andGroup:{ expressions:[{filter:expr.filter}] } };
   const d = await ga4post(token, body);
   if (!d.rows) return [];
-  return d.rows.map(r => ({
-    date: r.dimensionValues[0]?.value,
-    label: formatDate(r.dimensionValues[0]?.value),
-    sessions: parseInt(r.metricValues[0]?.value||0),
-    users: parseInt(r.metricValues[1]?.value||0),
-    pageViews: parseInt(r.metricValues[2]?.value||0),
-  }));
-}
-
-function formatDate(d) {
-  if (!d) return '';
-  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const date = new Date(d.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'));
-  return days[date.getDay()];
+  return d.rows.map(row => {
+    const date = row.dimensionValues?.[0]?.value;
+    const vals = row.metricValues;
+    return { date, label: new Date(date.slice(0,4), date.slice(4,6)-1, date.slice(6,8)).toLocaleDateString('en-US',{weekday:'short'}).substring(0,3), sessions: parseInt(vals[0]?.value||0), users: parseInt(vals[1]?.value||0), pageViews: parseInt(vals[2]?.value||0) };
+  });
 }
 
 async function fetchPages(token, startDate, endDate, region) {
   const expr = countryExpr(region);
-  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'pagePath'},{name:'pageTitle'}], metrics:[{name:'screenPageViews'},{name:'averageSessionDuration'},{name:'bounceRate'},{name:'sessions'},{name:'engagementRate'}], orderBys:[{metric:{metricName:'screenPageViews'},desc:true}], limit:10 };
+  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'pagePathAndQueryString'},{name:'pageTitle'}], metrics:[{name:'screenPageViews'},{name:'engagementRate'},{name:'averageSessionDuration'},{name:'bounceRate'},{name:'sessions'}], limit:50, orderBys:[{metric:{metricName:'screenPageViews'},descending:true}] };
   if (expr) body.dimensionFilter = { andGroup:{ expressions:[{filter:expr.filter}] } };
   const d = await ga4post(token, body);
   if (!d.rows) return [];
-  return d.rows.map(row => {
-    const bounce = parseFloat((parseFloat(row.metricValues[2]?.value||0)*100).toFixed(1));
-    const eng = parseFloat((parseFloat(row.metricValues[1]?.value||0)/60).toFixed(1));
-    const engRate = parseFloat((parseFloat(row.metricValues[4]?.value||0)*100).toFixed(1));
-    const title = row.dimensionValues[1]?.value;
-    const health = engRate>70&&eng>2?'excellent':engRate>50?'good':engRate>30?'warning':'critical';
-    const rec = (health==='warning'||health==='critical') ? getRecommendation(row.dimensionValues[0]?.value||'/', engRate, bounce, eng) : null;
-    return { page:row.dimensionValues[0]?.value||'/', title:(!title||title==='(not set)'||title==='Untitled')?null:title, views:parseInt(row.metricValues[0]?.value||0), engagement:eng, bounceRate:bounce, engagementRate:engRate, sessions:parseInt(row.metricValues[3]?.value||0), health, recommendation:rec };
+  return d.rows.slice(0,10).map(row => {
+    const page = row.dimensionValues?.[0]?.value || '/';
+    const title = row.dimensionValues?.[1]?.value;
+    const views = parseInt(row.metricValues?.[0]?.value||0);
+    const engagement = parseFloat((parseFloat(row.metricValues?.[1]?.value||0)*100).toFixed(1));
+    const time = parseFloat(row.metricValues?.[2]?.value||0);
+    const bounce = parseFloat((parseFloat(row.metricValues?.[3]?.value||0)*100).toFixed(1));
+    const sessions = parseInt(row.metricValues?.[4]?.value||0);
+    const health = engagement >= 60 ? 'excellent' : engagement >= 40 ? 'good' : engagement >= 20 ? 'warning' : 'critical';
+    let recommendation = null;
+    if (health === 'warning' || health === 'critical') recommendation = 'Product page bounce is high. Add customer testimonials, a clear pricing anchor, and a demo CTA visible without scrolling.';
+    return { page, title, views, engagement: time.toFixed(1), bounceRate: bounce, engagementRate: engagement, sessions, health, recommendation };
   });
-}
-
-function getRecommendation(page, engRate, bounce, eng) {
-  if (page === '/') return 'Homepage has the highest US traffic but 65%+ bounce. Test a more direct hero headline — US restaurant operators respond to ROI-focused messaging.';
-  if (page.includes('product') && bounce > 50) return 'Product page bounce is high. Add customer testimonials, a clear pricing anchor, and a demo CTA visible without scrolling.';
-  if (page.includes('careers') && engRate < 30) return 'Careers page has very low engagement from US visitors. Check if the page loads correctly — could be a geo-specific rendering issue.';
-  if (bounce > 60) return 'High bounce rate — review the page hero. Users are leaving without scrolling. Consider a clearer value proposition above the fold.';
-  if (engRate < 40) return 'Low engagement — content may not match user intent. Review what keywords bring users here.';
-  return 'Review content structure and ensure primary CTA is visible without scrolling.';
 }
 
 async function fetchSources(token, startDate, endDate, region) {
   const expr = countryExpr(region);
-  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'sessionDefaultChannelGroup'}], metrics:[{name:'sessions'},{name:'totalUsers'}], orderBys:[{metric:{metricName:'sessions'},desc:true}], limit:6 };
+  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'firstUserSourceMedium'}], metrics:[{name:'sessions'},{name:'totalUsers'}], orderBys:[{metric:{metricName:'sessions'},descending:true}] };
   if (expr) body.dimensionFilter = { andGroup:{ expressions:[{filter:expr.filter}] } };
   const d = await ga4post(token, body);
   if (!d.rows) return [];
-  const total = d.rows.reduce((s,r)=>s+parseInt(r.metricValues[0]?.value||0),0);
-  return d.rows.map(r=>({ source:r.dimensionValues[0]?.value||'Unknown', sessions:parseInt(r.metricValues[0]?.value||0), users:parseInt(r.metricValues[1]?.value||0), pct:total>0?parseFloat((parseInt(r.metricValues[0]?.value||0)/total*100).toFixed(1)):0 }));
+  const total = d.rows.reduce((s,r) => s+parseInt(r.metricValues?.[0]?.value||0), 0);
+  return d.rows.map(row => {
+    const src = row.dimensionValues?.[0]?.value || 'Direct';
+    const srcClean = src.replace(/ \/ /g, ' ').split(' ').map((w,i)=>i===0?w[0].toUpperCase()+w.slice(1):w).join(' ');
+    const sessions = parseInt(row.metricValues?.[0]?.value||0);
+    const users = parseInt(row.metricValues?.[1]?.value||0);
+    return { source: srcClean, sessions, users, pct: parseFloat(((sessions/total)*100).toFixed(1)) };
+  });
 }
 
 async function fetchNewReturn(token, startDate, endDate, region) {
   const expr = countryExpr(region);
-  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'newVsReturning'}], metrics:[{name:'sessions'},{name:'totalUsers'}] };
+  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'userType'}], metrics:[{name:'sessions'}] };
   if (expr) body.dimensionFilter = { andGroup:{ expressions:[{filter:expr.filter}] } };
   const d = await ga4post(token, body);
-  if (!d.rows) return {new:0,returning:0,other:0,newPct:0,returningPct:0,otherPct:0};
-  const total = d.rows.reduce((s,r)=>s+parseInt(r.metricValues[0]?.value||0),0);
-  let nw=0,ret=0;
-  d.rows.forEach(r=>{ const v=parseInt(r.metricValues[0]?.value||0); if(r.dimensionValues[0]?.value==='new') nw=v; else ret=v; });
-  const other=Math.max(0,total-nw-ret);
-  return { new:nw, returning:ret, other, newPct:total>0?parseFloat((nw/total*100).toFixed(1)):0, returningPct:total>0?parseFloat((ret/total*100).toFixed(1)):0, otherPct:total>0?parseFloat((other/total*100).toFixed(1)):0 };
+  if (!d.rows) return { new:0, returning:0, other:0, newPct:0, returningPct:0, otherPct:0 };
+  const new_v = d.rows.find(r=>r.dimensionValues?.[0]?.value==='new') || {metricValues:[{value:'0'}]};
+  const ret_v = d.rows.find(r=>r.dimensionValues?.[0]?.value==='returning') || {metricValues:[{value:'0'}]};
+  const n = parseInt(new_v.metricValues?.[0]?.value||0);
+  const r = parseInt(ret_v.metricValues?.[0]?.value||0);
+  const o = d.rows.reduce((s,x) => s+parseInt(x.metricValues?.[0]?.value||0), 0) - n - r;
+  const total = n + r + o;
+  return { new:n, returning:r, other:o, newPct: parseFloat(((n/total)*100).toFixed(1)), returningPct: parseFloat(((r/total)*100).toFixed(1)), otherPct: parseFloat(((o/total)*100).toFixed(1)) };
 }
 
 async function fetchExitPages(token, startDate, endDate, region) {
   const expr = countryExpr(region);
-  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'pagePath'}], metrics:[{name:'sessions'},{name:'bounceRate'}], orderBys:[{metric:{metricName:'bounceRate'},desc:true}], limit:5 };
+  const body = { dateRanges:[{startDate,endDate}], dimensions:[{name:'exitPage'}], metrics:[{name:'sessions'},{name:'bounceRate'}], limit:25, orderBys:[{metric:{metricName:'sessions'},descending:true}] };
   if (expr) body.dimensionFilter = { andGroup:{ expressions:[{filter:expr.filter}] } };
   const d = await ga4post(token, body);
   if (!d.rows) return [];
-  return d.rows.map(r=>({ page:r.dimensionValues[0]?.value||'/', sessions:parseInt(r.metricValues[0]?.value||0), bounceRate:parseFloat((parseFloat(r.metricValues[1]?.value||0)*100).toFixed(1)) })).filter(r=>r.sessions>3);
+  return d.rows.slice(0,5).map(row => ({
+    page: row.dimensionValues?.[0]?.value || '/',
+    sessions: parseInt(row.metricValues?.[0]?.value||0),
+    bounceRate: parseFloat((parseFloat(row.metricValues?.[1]?.value||0)*100).toFixed(1))
+  }));
 }
 
 async function fetchGSC(token, days) {
   const siteUrl = process.env.GSC_SITE_URL;
   if (!siteUrl) throw new Error('Missing GSC_SITE_URL');
-  const end = new Date().toISOString().split('T')[0];
-  const start = new Date(Date.now()-days*86400000).toISOString().split('T')[0];
-  // Try multiple URL formats
-  const urlsToTry = [siteUrl, siteUrl.replace('https://','sc-domain:').replace('/',''), 'sc-domain:aioapp.com', 'https://aioapp.com/'];
-  const tryFetch = async (url, withFilter) => {
-    const body = { startDate:start, endDate:end, dimensions:['query'], rowLimit:25 };
-    if (withFilter) body.dimensionFilterGroups = [{ filters:[{dimension:'country',operator:'equals',expression:'usa'}] }];
-    const r = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(url)}/searchAnalytics/query`, { method:'POST', headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
-    return r.json();
+  const endDate = new Date();
+  const startDate = new Date(endDate.getTime() - days * 24 * 60 * 60 * 1000);
+  const fmt = d => d.toISOString().split('T')[0];
+  
+  const res = await fetch('https://www.googleapis.com/webmasters/v3/sites/sc-domain:aioapp.com/searchAnalytics/query', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      startDate: fmt(startDate),
+      endDate: fmt(endDate),
+      dimensions: ['query'],
+      rowLimit: 25
+    })
+  });
+  
+  if (!res.ok) throw new Error(`GSC API error: ${res.status}`);
+  const data = await res.json();
+  
+  // BRANDED KEYWORDS FILTER
+  const brandedKeywords = ['aio', 'aioapp', 'aio app', 'aio pos', 'aio dashboard', 'aio ai', 'aio software', 'aio platform'];
+  const isBranded = k => brandedKeywords.some(b => k.toLowerCase().includes(b));
+  
+  const keywords = (data.rows || [])
+    .filter(r => !isBranded(r.keys[0]))
+    .slice(0, 8)
+    .map(r => ({
+      keyword: r.keys[0],
+      impressions: r.impressions,
+      clicks: r.clicks,
+      ctr: parseFloat((r.ctr * 100).toFixed(1)),
+      position: parseFloat(r.position.toFixed(1))
+    }));
+  
+  const opps = (data.rows || [])
+    .filter(r => r.position > 8 && r.position < 35 && r.impressions > 20 && !isBranded(r.keys[0]))
+    .slice(0, 8)
+    .map(r => ({
+      keyword: r.keys[0],
+      impressions: r.impressions,
+      clicks: r.clicks,
+      ctr: parseFloat((r.ctr * 100).toFixed(1)),
+      position: parseFloat(r.position.toFixed(1)),
+      potential: r.impressions > 100 ? 'high' : r.impressions > 50 ? 'medium' : 'low',
+      gap: Math.round(r.position - 1)
+    }));
+  
+  const summary = {
+    totalImpressions: (data.rows || []).reduce((s,r) => s+r.impressions, 0),
+    totalClicks: (data.rows || []).reduce((s,r) => s+r.clicks, 0),
+    avgCTR: data.rows && data.rows.length > 0 ? parseFloat((data.rows.reduce((s,r) => s+r.ctr, 0) / data.rows.length * 100).toFixed(1)) : 0,
+    avgPosition: data.rows && data.rows.length > 0 ? parseFloat((data.rows.reduce((s,r) => s+r.position, 0) / data.rows.length).toFixed(1)) : 0
   };
-  let d = null;
-  for (const url of urlsToTry) {
-    const res = await tryFetch(url, true);
-    if (!res.error && res.rows?.length > 0) { d = res; break; }
-    const res2 = await tryFetch(url, false);
-    if (!res2.error && res2.rows?.length > 0) { d = res2; break; }
-  }
-  if (!d || d.error) throw new Error(d?.error?.message || 'No GSC data found');
-  const rows = d.rows||[];
-  const keywords = rows.slice(0,8).map(r=>({ keyword:r.keys[0], impressions:r.impressions||0, clicks:r.clicks||0, ctr:parseFloat(((r.ctr||0)*100).toFixed(1)), position:parseFloat((r.position||0).toFixed(1)) }));
-  const opportunities = rows.filter(r=>r.position>8&&r.position<35&&r.impressions>20).slice(0,5).map(r=>({ keyword:r.keys[0], impressions:r.impressions||0, clicks:r.clicks||0, ctr:parseFloat(((r.ctr||0)*100).toFixed(1)), position:parseFloat((r.position||0).toFixed(1)), potential:r.impressions>300?'high':'medium', gap:Math.max(1,Math.round(r.position-3)) }));
-  const ti=rows.reduce((s,r)=>s+(r.impressions||0),0), tc=rows.reduce((s,r)=>s+(r.clicks||0),0);
-  return { keywords, opportunities, summary:{ totalImpressions:ti, totalClicks:tc, avgCTR:ti>0?parseFloat((tc/ti*100).toFixed(1)):0, avgPosition:rows.length>0?parseFloat((rows.reduce((s,r)=>s+(r.position||0),0)/rows.length).toFixed(1)):0 } };
+  
+  return { keywords, opportunities: opps, summary };
+}
+
+function nullKPIs() {
+  return { sessions:{current:0,previous:0,change:0}, users:{current:0,previous:0,change:0}, pageViews:{current:0,previous:0,change:0}, avgEngagement:{current:0,previous:0,change:0}, bounceRate:{current:0,previous:0,change:0}, newUsers:{current:0,previous:0,change:0} };
 }
 
 async function fetchClarity(days) {
   const projectId = process.env.CLARITY_PROJECT_ID;
   const apiToken = process.env.CLARITY_API_TOKEN;
-  if (!projectId || !apiToken || apiToken==='none') return null;
+  if (!projectId || !apiToken) throw new Error('Missing Clarity credentials');
+  
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  const fmt = d => d.toISOString().split('T')[0];
+  const startDate = fmt(start);
+  const endDate = fmt(end);
 
-  const end = new Date().toISOString().split('T')[0];
-  const start = new Date(Date.now()-days*86400000).toISOString().split('T')[0];
-
-  // Clarity Data Export API — fetches per metric
+  // FIXED: Clarity Metrics Parsing
+  // For click metrics: read from appropriate field (value, count, or subTotal)
+  // For session metrics: read from sessionsCount
+  
   const metrics = ['RageClickCount','DeadClickCount','ErrorClickCount','FrustratedSessionCount','TotalSessionCount'];
   const results = {};
 
   await Promise.all(metrics.map(async metric => {
     try {
-      const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${projectId}&startDate=${start}&endDate=${end}&granularity=daily&dimension=All&metric=${metric}`;
-      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${apiToken}`, 'Ocp-Apim-Subscription-Key': apiToken } });
-      if (!res.ok) return;
+      const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${projectId}&startDate=${startDate}&endDate=${endDate}&granularity=daily&dimension=All&metric=${metric}`;
+      const res = await fetch(url, { 
+        headers: { 
+          'Authorization': `Bearer ${apiToken}`, 
+          'Ocp-Apim-Subscription-Key': apiToken 
+        } 
+      });
+      
+      if (!res.ok) {
+        if (res.status === 429) console.warn(`Clarity rate limited (429) for ${metric}`);
+        return;
+      }
+      
       const data = await res.json();
-      // Each metric returns array, aggregate subTotal across all days
       const rows = Array.isArray(data) ? data : [];
       let total = 0;
+      
       rows.forEach(row => {
-        if (row.information) {
-          row.information.forEach(info => { total += parseInt(info.subTotal || 0); });
+        if (row.information && Array.isArray(row.information)) {
+          row.information.forEach(info => {
+            // FIX: Handle both session metrics (sessionsCount) and click metrics (subTotal or value)
+            if (metric.includes('SessionCount') || metric.includes('Frustrated')) {
+              total += parseInt(info.sessionsCount || 0);
+            } else {
+              // Click metrics: try subTotal first, then value, then count
+              total += parseInt(info.subTotal || info.value || info.count || 0);
+            }
+          });
         }
       });
+      
       results[metric] = total;
-    } catch(e) { results[metric] = 0; }
-  }));
-
-  // Also get session count
-  try {
-    const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${projectId}&startDate=${start}&endDate=${end}&granularity=daily&dimension=All&metric=TotalSessionCount`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${apiToken}`, 'Ocp-Apim-Subscription-Key': apiToken } });
-    if (res.ok) {
-      const data = await res.json();
-      const rows = Array.isArray(data) ? data : [];
-      let total = 0;
-      rows.forEach(row => { if (row.information) row.information.forEach(info => { total += parseInt(info.sessionsCount || 0); }); });
-      results['TotalSessionCount'] = total;
+    } catch(e) { 
+      console.error(`Clarity error for ${metric}:`, e.message);
+      results[metric] = 0; 
     }
-  } catch(e) {}
+  }));
 
   const sessions = results['TotalSessionCount'] || 0;
   const frustrated = results['FrustratedSessionCount'] || 0;
@@ -259,6 +308,45 @@ async function fetchClarity(days) {
   };
 }
 
-function nullKPIs() {
-  return { sessions:{current:0,previous:0,change:0}, users:{current:0,previous:0,change:0}, pageViews:{current:0,previous:0,change:0}, avgEngagement:{current:0,previous:0,change:0}, bounceRate:{current:0,previous:0,change:0}, newUsers:{current:0,previous:0,change:0} };
-}
+/* ══════════════════════════════════════════════════════════════
+   POSTGRES FOUNDATION — Weekly Snapshots (Coming Soon)
+   
+   Schema for `aio_dashboard_snapshots` table:
+   
+   CREATE TABLE aio_dashboard_snapshots (
+     id BIGSERIAL PRIMARY KEY,
+     week_start DATE NOT NULL,
+     week_end DATE NOT NULL,
+     region VARCHAR(10) NOT NULL DEFAULT 'US',
+     sessions INT,
+     users INT,
+     pageViews INT,
+     avgEngagement DECIMAL(5,2),
+     bounceRate DECIMAL(5,2),
+     newUsers INT,
+     topKeyword VARCHAR(255),
+     topKeywordImpressions INT,
+     topKeywordClicks INT,
+     topKeywordCTR DECIMAL(5,2),
+     opportunityCount INT,
+     highBouncePageCount INT,
+     clarity_rageClicks INT,
+     clarity_deadClicks INT,
+     clarity_errorClicks INT,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+     UNIQUE(week_start, region)
+   );
+   
+   Usage: Every Monday 00:00 UTC, run:
+   - Fetch last 7 days of data
+   - Insert into snapshots table
+   - Dashboard queries trends: SELECT * FROM snapshots ORDER BY week_start DESC LIMIT 12
+   
+   This enables:
+   ✓ Weekly email reports (compare week-over-week)
+   ✓ Historical trend charts (12+ weeks of data)
+   ✓ Anomaly detection (bounce rate spike, traffic drop)
+   ✓ Manager reporting (monthly performance reviews)
+   
+   TODO: Set up Vercel cron job to call this weekly
+══════════════════════════════════════════════════════════════ */
