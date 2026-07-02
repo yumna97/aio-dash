@@ -59,7 +59,7 @@ export default function Home() {
 
   const insights = () => {
     const list = [];
-    if ((kpis.sessions?.change||0)>10) list.push({t:'good',text:`Sessions up ${kpis.sessions.change}% vs previous ${days}d — strong momentum in ${region==='US'?'the US':'all markets'}.`});
+    if ((kpis.sessions?.change||0)>10) list.push({t:'good',text:`Sessions up ${kpis.sessions.change}% vs previous ${days}d — strong momentum in ${region==='US'?'United States':'all markets'}.`});
     else if ((kpis.sessions?.change||0)<-10) list.push({t:'bad',text:`Sessions dropped ${Math.abs(kpis.sessions?.change||0)}%. Check for ranking drops or traffic source changes.`});
     if ((kpis.bounceRate?.current||0)>60) list.push({t:'bad',text:`Bounce rate is ${kpis.bounceRate?.current}% — above benchmark. Homepage hero needs a stronger value proposition for US restaurant operators.`});
     if ((kpis.avgEngagement?.change||0)<-15) list.push({t:'warn',text:`Avg engagement dropped ${Math.abs(kpis.avgEngagement?.change||0)}%. Users may be scanning rather than reading — add visual content and shorter paragraphs.`});
@@ -107,7 +107,7 @@ export default function Home() {
       <div style={{maxWidth:'1400px',margin:'0 auto',padding:'1rem 1.5rem'}}>
         {/* Status */}
         <div style={{background:'#fff',border:'1px solid #E5E7EB',borderRadius:'8px',padding:'7px 14px',fontSize:'12px',color:'#6B7280',marginBottom:'1rem',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <span>Last <strong style={{color:'#111827'}}>{days} days</strong> · {region==='US'?'🇺🇸 US traffic only':'🌍 All countries'}</span>
+          <span>Last <strong style={{color:'#111827'}}>{days} days</strong> · {region==='US'?'🇺🇸 United States traffic only':'🌍 All countries'}</span>
           <span style={{display:'flex',alignItems:'center',gap:'10px'}}>
             {loading?<span>⏳ Loading…</span>:<span>Refreshed {ts}</span>}
             <button onClick={load} style={{fontSize:'11px',padding:'3px 10px',border:'1px solid #D1D5DB',borderRadius:'6px',background:'#fff',cursor:'pointer'}}>↻ Refresh</button>
